@@ -67,6 +67,10 @@ class Github(object):
         resource_url = '{}/orgs'.format(self.user_resource_url(username))
         return self.get(resource_url, **params)
 
+    def organization(self, login, **params):
+        resource_url = '/orgs/{}'.format(login)
+        return self.get(resource_url, **params)
+
     def organizations_repos(self, organization, **params):
         resource_url = '/orgs/{}/repos'.format(organization)
         return self.get(resource_url, **params)
