@@ -1,0 +1,7 @@
+PyYAML
+requests
+-e git://github.com/alfredhq/alfred-db.git@develop#egg=alfred-db
+  SQLAlchemy
+  psycopg2
+
+-e .
