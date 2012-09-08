@@ -1,5 +1,6 @@
 PyYAML
 requests
+nosetests
 -e git://github.com/alfredhq/alfred-db.git@develop#egg=alfred-db
   SQLAlchemy
   psycopg2
