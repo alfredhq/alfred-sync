@@ -1,5 +1,6 @@
 import requests
 import json
+from urllib.parse import parse_qs
 
 
 class GithubException(Exception):
@@ -11,7 +12,9 @@ class Github(object):
     API_ROOT = 'https://api.github.com'
 
     def __init__(self, login, password=None, token=None):
-        params = {}
+        params = {
+            'per_page': 100,
+        }
         auth = None
         if token is not None:
             params['access_token'] = token
@@ -21,20 +24,44 @@ class Github(object):
             params['access_token'] = login
         self.requester = requests.session(params=params, auth=auth)
 
+    def parse_link_headers(self, link_header):
+        links = {}
+        for link in link_header.split(','):
+            url, rel = link.split('; ')
+            url = url[1:-1].split('?')[1]
+            rel = rel[5:-1]
+            links[rel] = parse_qs(url)
+        return links
+
     def get_full_url(self, url):
         return '{}{}'.format(self.API_ROOT, url)
 
-    def get(self, url, **params):
-        response = self.requester.get(
-            self.get_full_url(url), params=params
-        )
-        if response.status_code == 200:
-            return response.json
-        raise GithubException(
-            'GET {!r} returned status code {!r}'.format(
-                self.get_full_url(url), response.status_code
+    def _get(self, url, **params):
+        response = self.requester.get(url, params=params)
+        if not response.status_code == 200:
+            raise GithubException(
+                'GET {!r} returned status code {!r}'.format(
+                    self.get_full_url(url), response.status_code
+                )
             )
-        )
+        return response
+
+    def _get_paginated_list(self, url, per_page, last_page):
+        for page in range(1, last_page):
+            items = self._get(url, per_page=per_page, page=page).json
+            for item in items:
+                yield item
+
+    def get(self, url, **params):
+        url = self.get_full_url(url)
+        response = self._get(url, **params)
+        if 'link' in response.headers:
+            links = self.parse_link_headers(response.headers['link'])
+            last = links['last']
+            last_page = int(last['page'][0])
+            per_page = last['per_page']
+            return self._get_paginated_list(url, per_page, last_page)
+        return response.json
 
     def post(self, url, data=None):
         if data is None:
