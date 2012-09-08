@@ -56,7 +56,8 @@ class Github(object):
         url = self.get_full_url(url)
         response = self._get(url, **params)
         if 'link' in response.headers:
-            links = self.parse_link_headers(response.headers['link'])
+            link_header = response.headers['link']
+            links = self.parse_link_headers(link_header)
             last = links['last']
             last_page = int(last['page'][0])
             per_page = last['per_page']
