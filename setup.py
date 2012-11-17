@@ -14,6 +14,13 @@ setup(
         'SQLAlchemy',
         'PyYAML',
         'alfred-db',
-        'requests',
+        'msgpack-python',
+        'pyzmq',
+        'PyGithub',
     ],
+    entry_points={
+        'console_scripts': [
+            'alfred-sync = alfred_sync.__main__:main'
+        ],
+    }
 )
