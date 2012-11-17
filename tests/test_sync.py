@@ -1,11 +1,8 @@
-import unittest
 import mock
+import unittest
 
-from alfred_db import Session
 from alfred_db.models import Repository, User, Permission, Organization, Base
 from alfred_sync.sync import SyncHandler
-
-from sqlalchemy import create_engine
 
 
 class AnyObject(object):
@@ -66,7 +63,9 @@ class AlfredSyncTestCase(unittest.TestCase):
         return repo
 
     def create_organization(self):
-        organization = Organization(github_id=2000, login='alfred', name='Alfred')
+        organization = Organization(
+            github_id=2000, login='alfred', name='Alfred'
+        )
         self.session.add(organization)
         self.session.commit()
         return organization
@@ -91,14 +90,11 @@ class AlfredSyncTestCase(unittest.TestCase):
         self.assertTrue(permissions.pull)
 
     def test_repo_updated(self):
+        created_repo = self.create_repo()
         self.sync_handler.save_repo(self.github_repo)
-        self.sync_handler.save_repo(self.github_repo)
+        repo = self.sync_handler.save_repo(self.github_repo)
         count = self.session.query(Repository).count()
         self.assertEqual(count, 1)
-
-    def test_repo_updated(self):
-        created_repo = self.create_repo()
-        repo = self.sync_handler.save_repo(self.github_repo)
         self.assertEqual(created_repo.id, repo.id)
         self.assertEqual(created_repo.token, 'repo-token')
 
@@ -146,7 +142,9 @@ class AlfredSyncTestCase(unittest.TestCase):
     @mock.patch('alfred_sync.sync.SyncHandler.remove_unused_repos')
     @mock.patch('alfred_sync.sync.SyncHandler.save_repo')
     def test_sync_user_repos(self, save_repo, remove_unused_repos):
-        self.sync_handler.github.get_user().get_repos.return_value = [self.github_repo]
+        self.sync_handler.github.get_user().get_repos.return_value = [
+            self.github_repo
+        ]
         repo = self.create_repo()
         save_repo.return_value = repo
         self.sync_handler.sync_user_repos()
