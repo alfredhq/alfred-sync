@@ -1,23 +1,26 @@
-from sqlalchemy import create_engine
-
 from alfred_db.session import Session
 from alfred_db.models import User, Organization, Repository, Permission
 from alfred_db.models.organization import Membership
 
-from .github import Github
+from github import Github
+from sqlalchemy import create_engine
+
+from .utils import generate_token
 
 
 class SyncHandler(object):
 
-    db_session = None
-    github = None
+    @classmethod
+    def run(cls, database_uri, user_id):
+        cls(database_uri)(user_id)
 
     def __init__(self, database_uri):
-        self.database_uri = database_uri
+        self.engine = create_engine(database_uri)
+        self.db_session = Session(bind=self.engine)
+        self.user = None
+        self.github = None
 
-    def run(self, user_id):
-        engine = create_engine(self.database_uri)
-        self.db_session = Session(bind=engine)
+    def __call__(self, user_id):
         try:
             self.sync(user_id)
         except Exception as e:
@@ -36,39 +39,39 @@ class SyncHandler(object):
 
     def sync_user_repos(self):
         stored_repos = self.db_session.query(Repository.id).filter(
-            Repository.owner_id==self.user.github_id,
-            Repository.owner_type=='user',
+            Repository.owner_id == self.user.github_id,
+            Repository.owner_type == 'user',
         )
         stored_repos = [repo.id for repo in stored_repos]
         saved_repos = []
-        for repo in self.github.user_repos(type='owner'):
-            saved_repos.append(self.save_repo(repo))
+        for github_repo in self.github.get_user().get_repos('public'):
+            repo = self.save_repo(github_repo)
+            saved_repos.append(repo.id)
         self.remove_unused_repos(stored_repos, saved_repos)
 
     def sync_user_organizations(self):
         self.drop_memberships()
         orgs = []
-        for org in self.github.user_organizations():
+        for org in self.github.get_user().get_orgs():
             orgs.append(self.save_org(org))
         self.user.organizations = orgs
         self.db_session.flush()
 
-    def save_org(self, gh_org):
-        data = self.github.organization(gh_org['login'])
+    def save_org(self, github_org):
         org = self.db_session.query(Organization).filter_by(
-            github_id=data['id'],
+            github_id=github_org.id,
         ).first()
         if org is None:
             org = Organization(
-                github_id=data['id'],
-                login=data['login'],
-                name=data['name'],
+                github_id=github_org.id,
+                login=github_org.login,
+                name=github_org.name,
             )
             self.db_session.add(org)
             self.db_session.flush()
         else:
-            org.login = data['login']
-            org.name = data['name']
+            org.login = github_org.login
+            org.name = github_org.name
         self.sync_org_repos(org)
         return org
 
@@ -78,8 +81,11 @@ class SyncHandler(object):
         )
         stored_repos = [repo.id for repo in stored_repos]
         saved_repos = []
-        for repo in self.github.organizations_repos(org.login):
-            saved_repos.append(self.save_repo(repo))
+        github_organization = self.github.get_organization(org.login)
+        github_repos = github_organization.get_repos('public')
+        for github_repo in github_repos:
+            repo = self.save_repo(github_repo)
+            saved_repos.append(repo.id)
         self.remove_unused_repos(stored_repos, saved_repos)
 
     def drop_memberships(self):
@@ -88,32 +94,32 @@ class SyncHandler(object):
         ).delete('fetch')
         self.db_session.flush()
 
-    def save_repo(self, data):
-        owner_data = self.github.user(data['owner']['login'])
+    def save_repo(self, github_repo):
         repo = self.db_session.query(Repository.id).filter_by(
-            github_id=data['id'],
+            github_id=github_repo.id,
         ).first()
         if repo is None:
             repo = Repository(
-                github_id=data['id'],
-                name=data['name'],
-                url=data['html_url'],
-                owner_name=owner_data['login'],
-                owner_type=owner_data['type'].lower(),
-                owner_id=owner_data['id']
+                github_id=github_repo.id,
+                name=github_repo.name,
+                url=github_repo.html_url,
+                owner_name=github_repo.owner.login,
+                owner_type=github_repo.owner.type.lower(),
+                owner_id=github_repo.owner.id,
+                token=generate_token(github_repo.id)
             )
             self.db_session.add(repo)
             self.db_session.flush()
         else:
-            repo.name = data['name']
-            repo.url = data['html_url']
-            repo.owner_name = owner_data['login']
-            repo.owner_type = owner_data['type'].lower()
-            repo.owner_id = owner_data['id']
-        self.save_repo_permissions(repo.id, data['permissions'])
-        return repo.id
+            repo.name = github_repo.name
+            repo.url = github_repo.html_url
+            repo.owner_name = github_repo.owner.login
+            repo.owner_type = github_repo.owner.type.lower()
+            repo.owner_id = github_repo.owner.id
+        self.save_repo_permissions(repo.id, github_repo.permissions)
+        return repo
 
-    def save_repo_permissions(self, repo_id, data):
+    def save_repo_permissions(self, repo_id, permissions):
         permission = self.db_session.query(Permission).filter_by(
             repository_id=repo_id, user_id=self.user.id
         ).first()
@@ -121,16 +127,16 @@ class SyncHandler(object):
             permission = Permission(
                 repository_id=repo_id,
                 user_id=self.user.id,
-                admin=data['admin'],
-                push=data['push'],
-                pull=data['pull'],
+                admin=permissions.admin,
+                push=permissions.push,
+                pull=permissions.pull,
             )
             self.db_session.add(permission)
             self.db_session.flush()
         else:
-            permission.admin = data['admin']
-            permission.push = data['push']
-            permission.pull = data['pull']
+            permission.admin = permissions.admin
+            permission.pull = permissions.pull
+            permission.push = permissions.push
 
     def remove_unused_repos(self, stored_repos, saved_repos):
         difference = set(stored_repos) - set(saved_repos)
