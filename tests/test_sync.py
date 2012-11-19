@@ -4,26 +4,21 @@ import unittest
 from alfred_db.models import Repository, User, Permission, Organization, Base
 from alfred_sync.sync import SyncHandler
 
-
-class AnyObject(object):
-
-    def __init__(self, **kwargs):
-        for key, value in kwargs.items():
-            setattr(self, key, value)
+from pretend import stub
 
 
 class AlfredSyncTestCase(unittest.TestCase):
 
-    github_repo = AnyObject(
+    github_repo = stub(
         id=1000, name='test',
-        owner=AnyObject(
+        owner=stub(
             login='xobb1t',
             type='User',
             id=3000
         ), html_url='https://github.com/xobb1t/test',
-        permissions=AnyObject(admin=True, push=False, pull=True)
+        permissions=stub(admin=True, push=False, pull=True)
     )
-    github_organization = AnyObject(id=2000, login='alfred', name='Alfred')
+    github_organization = stub(id=2000, login='alfred', name='Alfred')
 
     def setUp(self):
         self.sync_handler = SyncHandler('sqlite:///:memory:')

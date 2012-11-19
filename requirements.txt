@@ -1,4 +1,6 @@
 nose
+mock
+pretend
 -e git://github.com/alfredhq/alfred-db.git@develop#egg=alfred-db
   psycopg2
 
