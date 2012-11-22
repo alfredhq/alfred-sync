@@ -25,6 +25,8 @@ class SyncHandler(object):
         self.github = Github(self.user.github_access_token)
 
     def sync(self):
+        if self.user.is_syncing:
+            return
         self.set_user_syncing(True)
         try:
             self.sync_user_repos()

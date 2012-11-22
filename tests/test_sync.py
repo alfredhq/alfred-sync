@@ -194,3 +194,11 @@ class AlfredSyncTestCase(unittest.TestCase):
         handler_init.return_value = None
         SyncHandler.run('sqlite:///:memory:', 1)
         self.assertTrue(handler_init.called)
+
+    @mock.patch('alfred_sync.sync.SyncHandler.sync_user_repos')
+    @mock.patch('alfred_sync.sync.SyncHandler.sync_user_organizations')
+    def test_user_already_synging(self, sync_user_organizations, sync_user_repos):
+        self.user.is_syncing = True
+        self.sync_handler.sync()
+        self.assertFalse(sync_user_repos.called)
+        self.assertFalse(sync_user_organizations.called)
