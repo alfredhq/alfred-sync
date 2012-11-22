@@ -1,10 +1,18 @@
+from datetime import datetime
+
 import mock
 import unittest
-
+from alfred_db import Session
 from alfred_db.models import Repository, User, Permission, Organization, Base
 from alfred_sync.sync import SyncHandler
 
+from sqlalchemy import create_engine
 from pretend import stub
+from pytz import utc
+
+
+engine = create_engine('sqlite:///:memory:')
+Session.configure(bind=engine)
 
 
 class AlfredSyncTestCase(unittest.TestCase):
@@ -21,26 +29,24 @@ class AlfredSyncTestCase(unittest.TestCase):
     github_organization = stub(id=2000, login='alfred', name='Alfred')
 
     def setUp(self):
-        self.sync_handler = SyncHandler('sqlite:///:memory:')
+        self.session = Session()
+        Base.metadata.create_all(engine)
+        self.user = self.create_user()
+        self.sync_handler = SyncHandler(self.session, self.user.id)
 
         self.github_patch = mock.patch('alfred_sync.sync.Github')
         self.Github = self.github_patch.start()
         self.sync_handler.github = self.Github()
 
-        self.engine = self.sync_handler.engine
-        self.session = self.sync_handler.db_session
-        Base.metadata.create_all(self.engine)
-        self.user = self.sync_handler.user = self.create_user()
-
     def tearDown(self):
         self.session.close()
-        Base.metadata.drop_all(self.engine)
+        Base.metadata.drop_all(engine)
         self.github_patch.stop()
 
     def create_user(self):
         user = User(github_id=1000, github_access_token='token',
                     login='alfred', name='Alfred', email='alfred@alfred.org',
-                    apitoken='apitoken')
+                    apitoken='superapitoken')
         self.session.add(user)
         self.session.commit()
         return user
@@ -144,3 +150,47 @@ class AlfredSyncTestCase(unittest.TestCase):
         save_repo.return_value = repo
         self.sync_handler.sync_user_repos()
         remove_unused_repos.assert_called_once_with([repo.id], [repo.id])
+
+    @mock.patch('alfred_sync.sync.Session.rollback')
+    @mock.patch('alfred_sync.sync.SyncHandler.sync_user_repos')
+    def test_rollback_on_exception(self, sync_user_repos, session_rollback):
+        sync_user_repos.side_effect = TypeError
+        with self.assertRaises(TypeError):
+            self.sync_handler.sync()
+        self.assertTrue(session_rollback.called)
+
+    @mock.patch('alfred_sync.sync.SyncHandler.sync_user_repos')
+    @mock.patch('alfred_sync.sync.SyncHandler.set_user_syncing')
+    def test_sync_status_changes(self, set_user_syncing, sync_user_repos):
+        sync_user_repos.side_effect = TypeError
+        with self.assertRaises(TypeError):
+            self.sync_handler.sync()
+        set_user_syncing.assert_has_calls([
+            mock.call(True),
+            mock.call(False)
+        ])
+
+    @mock.patch('alfred_sync.sync.SyncHandler.sync_user_repos')
+    @mock.patch('alfred_sync.sync.SyncHandler.sync_user_organizations')
+    @mock.patch('alfred_sync.sync.now')
+    def test_user_last_synced_at_set(self, now, sync_user_organizations,
+                                     sync_user_repos):
+        now.return_value = datetime.utcnow().replace(tzinfo=utc)
+        self.sync_handler.sync()
+        self.assertTrue(now.called)
+
+    @mock.patch('alfred_sync.sync.SyncHandler.sync_user_repos')
+    @mock.patch('alfred_sync.sync.now')
+    def test_user_last_synced_with_exception(self, now, sync_user_repos):
+        sync_user_repos.side_effect = TypeError
+        with self.assertRaises(TypeError):
+            self.sync_handler.sync()
+        self.assertFalse(now.called)
+
+
+    @mock.patch('alfred_sync.sync.SyncHandler.__init__')
+    @mock.patch('alfred_sync.sync.SyncHandler.sync')
+    def test_run_method(self, handler_sync, handler_init):
+        handler_init.return_value = None
+        SyncHandler.run('sqlite:///:memory:', 1)
+        self.assertTrue(handler_init.called)

@@ -1,3 +1,4 @@
+from alfred_db.helpers import now
 from alfred_db.session import Session
 from alfred_db.models import User, Organization, Repository, Permission
 from alfred_db.models.organization import Membership
@@ -12,30 +13,35 @@ class SyncHandler(object):
 
     @classmethod
     def run(cls, database_uri, user_id):
-        cls(database_uri)(user_id)
+        engine = create_engine(database_uri)
+        db_session = Session(bind=engine)
+        instance = cls(db_session, user_id)
+        instance.sync()
 
-    def __init__(self, database_uri):
-        self.engine = create_engine(database_uri)
-        self.db_session = Session(bind=self.engine)
-        self.user = None
-        self.github = None
+    def __init__(self, db_session, user_id):
+        self.db_session = db_session
+        self.user_id = user_id
+        self.user = self.db_session.query(User).get(user_id)
+        self.github = Github(self.user.github_access_token)
 
-    def __call__(self, user_id):
+    def sync(self):
+        self.set_user_syncing(True)
         try:
-            self.sync(user_id)
-        except Exception as e:
+            self.sync_user_repos()
+            self.sync_user_organizations()
+        except Exception, e:
             self.db_session.rollback()
             raise e
         else:
+            self.user.last_synced_at = now()
             self.db_session.commit()
         finally:
+            self.set_user_syncing(False)
             self.db_session.close()
 
-    def sync(self, user_id):
-        self.user = self.db_session.query(User).get(user_id)
-        self.github = Github(self.user.github_access_token)
-        self.sync_user_repos()
-        self.sync_user_organizations()
+    def set_user_syncing(self, status):
+        self.user.is_syncing = status
+        self.db_session.commit()
 
     def sync_user_repos(self):
         stored_repos = self.db_session.query(Repository.id).filter(
