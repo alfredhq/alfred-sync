@@ -1,5 +1,7 @@
 from alfred_db.helpers import now
-from alfred_db.models import Organization, Repository, Permission, Membership
+from alfred_db.models.organization import Membership, Organization
+from alfred_db.models.permission import Permission
+from alfred_db.models.repository import Repository
 
 from .base import BaseHandler
 from .utils import generate_token
@@ -136,39 +138,3 @@ class SyncHandler(BaseHandler):
                 Repository.id.in_(difference)
             ).delete('fetch')
             self.db_session.flush()
-
-
-class HooksHandler(BaseHandler):
-
-    def run(self):
-        repo_id = self.task.get('repo_id')
-        permissions = self.db_session.query(Permission).filter_by(
-            user_id=self.user.id, repository_id=repo_id
-        ).first()
-        if permissions is None or not permissions.admin:
-            return
-        repo = permissions.repository
-        github_owner = self.github.get_user(repo.owner_name)
-        github_repo = github_owner.get_repo(repo.name)
-        if repo.hook_id:
-            self.delete_hook(repo, github_repo)
-        else:
-            self.create_hook(repo, github_repo)
-
-    def delete_hook(self, repo, github_repo):
-        github_repo.get_hook(repo.hook_id).delete()
-        repo.hook_id = None
-        self.db_session.commit()
-
-    def create_hook(self, repo, github_repo):
-        listener_url = '{}/?token={}'.format(
-            self.config['listener_url'],
-            repo.token,
-        )
-        hook_config = {
-            'url': listener_url,
-            'content_type': 'json'
-        }
-        hook = github_repo.create_hook('web', config=hook_config)
-        repo.hook_id = hook.id
-        self.db_session.commit()
