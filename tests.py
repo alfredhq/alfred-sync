@@ -7,7 +7,7 @@ from alfred_db import Session
 from alfred_db.models import Repository, User, Permission, Organization, Base
 
 from alfred_sync.base import BaseHandler
-from alfred_sync.handlers import SyncHandler, HooksHandler
+from alfred_sync.handlers import SyncHandler
 
 from sqlalchemy import create_engine
 from pretend import stub
@@ -23,7 +23,6 @@ class BaseTestCase(unittest.TestCase):
     config = {
         'num_workers': 2,
         'database_uri': 'sqlite:///:memory:',
-        'listener_url': 'http://listener.alfredhq.org',
     }
 
     def create_user(self):
