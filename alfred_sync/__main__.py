@@ -1,10 +1,10 @@
 import argparse
-import multiprocessing
-import msgpack
+import logging
+import signal
 import yaml
-import zmq
 
-from .handlers import SyncHandler
+from functools import partial
+from .process import SyncProcess
 
 
 def get_config(path):
@@ -12,31 +12,30 @@ def get_config(path):
         return yaml.load(file)
 
 
-def run(config):
-    context = zmq.Context()
-    socket = context.socket(zmq.PULL)
-    socket.bind(config.get('sync'))
-    pool = multiprocessing.Pool(processes=config.get('num_workers'))
-    try:
-        while True:
-            msg = socket.recv()
-            task = msgpack.unpackb(msg, encoding='utf-8')
-            pool.apply_async(SyncHandler.dispatch, args=(config, task))
-    except KeyboardInterrupt:
-        pass
-    finally:
-        pool.terminate()
-
-    socket.close()
-    context.term()
+def terminate_processes(processes, signum, frame):
+    for process in processes:
+        if process is not None and process.is_alive():
+            process.terminate()
+            process.join()
 
 
 def main():
+    logging.basicConfig(format='%(levelname)s:%(message)s', level=logging.INFO)
     parser = argparse.ArgumentParser()
     parser.add_argument('config')
     args = parser.parse_args()
     config = get_config(args.config)
-    run(config)
+
+    processes = []
+    for i in range(config['num_workers']):
+        process = SyncProcess(config)
+        process.start()
+        processes.append(process)
+
+    signal.signal(signal.SIGTERM, partial(terminate_processes, processes))
+
+    for process in processes:
+        process.join()
 
 
 if __name__ == '__main__':

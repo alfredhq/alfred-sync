@@ -1,37 +1,88 @@
+import logging
+import multiprocessing
+import os
+
+import msgpack
+import pika
+
 from alfred_db.helpers import now
 from alfred_db.models.organization import Membership, Organization
 from alfred_db.models.permission import Permission
 from alfred_db.models.repository import Repository
+from alfred_db.models.user import User
+from alfred_db.session import Session
 
-from .base import BaseHandler
+from github import Github
+from sqlalchemy import create_engine
+
 from .utils import generate_token
 
 
-class SyncHandler(BaseHandler):
+class SyncProcess(multiprocessing.Process):
+
+    def __init__(self, config):
+        super(SyncProcess, self).__init__()
+        self.config = config
 
     def run(self):
-        if self.user.is_syncing:
+        logging.info(
+            'Alfred-sync worker launched with pid: {!r}'.format(self.pid)
+        )
+        self.engine = create_engine(self.config['database_uri'])
+        self.session = Session(bind=self.engine)
+        amqp_config = self.config['amqp']
+        parameters = pika.URLParameters(amqp_config['url'])
+        connection = pika.BlockingConnection(parameters)
+        channel = connection.channel()
+        channel.queue_declare(queue=amqp_config['queue_name'], durable=True)
+        channel.basic_qos(prefetch_count=1)
+        channel.basic_consume(self.callback, queue=amqp_config['queue_name'])
+        try:
+            channel.start_consuming()
+        except Exception, e:
+            raise e
+        finally:
+            self.session.close()
+
+    def callback(self, ch, method, properties, body):
+        task = msgpack.unpackb(body, encoding='utf-8')
+        logging.info('[PID {!r}] Recieved task {!r}'.format(self.pid, task))
+        self.user_id = task['user_id']
+        self.user = self.session.query(User).filter_by(
+            id=self.user_id, is_syncing=False
+        ).first()
+        if not self.user:
+            ch.basic_ack(delivery_tag=method.delivery_tag)
+            logging.debug(
+                '[PID {!r}] User {!d} is already sincing or not exists'.format(
+                    self.pid, self.user_id
+                )
+            )
             return
+        self.github = Github(self.user.github_access_token)
         self.set_user_syncing(True)
         try:
-            self.sync_user_repos()
-            self.sync_user_organizations()
+            self.sync()
         except Exception, e:
-            self.db_session.rollback()
-            raise e
+            self.session.rollback()
         else:
             self.user.last_synced_at = now()
-            self.db_session.commit()
+            self.session.commit()
+            ch.basic_ack(delivery_tag=method.delivery_tag)
         finally:
             self.set_user_syncing(False)
-            self.db_session.close()
+            logging.info('[PID {!r}] Finished task {!r}'.format(self.pid, task))
+
+    def sync(self):
+        self.sync_user_repos()
+        self.sync_user_organizations()
 
     def set_user_syncing(self, status):
         self.user.is_syncing = status
-        self.db_session.commit()
+        self.session.commit()
 
     def sync_user_repos(self):
-        stored_repos = self.db_session.query(Repository.id).filter(
+        stored_repos = self.session.query(Repository.id).filter(
             Repository.owner_id == self.user.github_id,
             Repository.owner_type == 'user',
         )
@@ -48,10 +99,10 @@ class SyncHandler(BaseHandler):
         for org in self.github.get_user().get_orgs():
             orgs.append(self.save_org(org))
         self.user.organizations = orgs
-        self.db_session.flush()
+        self.session.flush()
 
     def save_org(self, github_org):
-        org = self.db_session.query(Organization).filter_by(
+        org = self.session.query(Organization).filter_by(
             github_id=github_org.id,
         ).first()
         if org is None:
@@ -60,8 +111,8 @@ class SyncHandler(BaseHandler):
                 login=github_org.login,
                 name=github_org.name,
             )
-            self.db_session.add(org)
-            self.db_session.flush()
+            self.session.add(org)
+            self.session.flush()
         else:
             org.login = github_org.login
             org.name = github_org.name
@@ -69,7 +120,7 @@ class SyncHandler(BaseHandler):
         return org
 
     def sync_org_repos(self, org):
-        stored_repos = self.db_session.query(Repository.id).filter_by(
+        stored_repos = self.session.query(Repository.id).filter_by(
             owner_type='organization', owner_id=org.github_id,
         )
         stored_repos = [repo.id for repo in stored_repos]
@@ -82,13 +133,13 @@ class SyncHandler(BaseHandler):
         self.remove_unused_repos(stored_repos, saved_repos)
 
     def drop_memberships(self):
-        self.db_session.query(Membership).filter_by(
+        self.session.query(Membership).filter_by(
             user_id=self.user.id
         ).delete('fetch')
-        self.db_session.flush()
+        self.session.flush()
 
     def save_repo(self, github_repo):
-        repo = self.db_session.query(Repository.id).filter_by(
+        repo = self.session.query(Repository.id).filter_by(
             github_id=github_repo.id,
         ).first()
         if repo is None:
@@ -101,8 +152,8 @@ class SyncHandler(BaseHandler):
                 owner_id=github_repo.owner.id,
                 token=generate_token(github_repo.id)
             )
-            self.db_session.add(repo)
-            self.db_session.flush()
+            self.session.add(repo)
+            self.session.flush()
         else:
             repo.name = github_repo.name
             repo.url = github_repo.html_url
@@ -113,7 +164,7 @@ class SyncHandler(BaseHandler):
         return repo
 
     def save_repo_permissions(self, repo_id, permissions):
-        permission = self.db_session.query(Permission).filter_by(
+        permission = self.session.query(Permission).filter_by(
             repository_id=repo_id, user_id=self.user.id
         ).first()
         if permission is None:
@@ -124,8 +175,8 @@ class SyncHandler(BaseHandler):
                 push=permissions.push,
                 pull=permissions.pull,
             )
-            self.db_session.add(permission)
-            self.db_session.flush()
+            self.session.add(permission)
+            self.session.flush()
         else:
             permission.admin = permissions.admin
             permission.pull = permissions.pull
@@ -134,7 +185,7 @@ class SyncHandler(BaseHandler):
     def remove_unused_repos(self, stored_repos, saved_repos):
         difference = set(stored_repos) - set(saved_repos)
         if difference:
-            self.db_session.query(Repository.id).filter(
+            self.session.query(Repository.id).filter(
                 Repository.id.in_(difference)
             ).delete('fetch')
-            self.db_session.flush()
+            self.session.flush()
