@@ -63,8 +63,8 @@ class SyncProcess(multiprocessing.Process):
         ).first()
 
     def callback(self, ch, method, properties, body):
-        logging.info('[PID {}] Recieved task {!r}'.format(self.pid, task))
         task = msgpack.unpackb(body, encoding='utf-8')
+        logging.info('[PID {}] Recieved task {!r}'.format(self.pid, task))
         self.user = self.get_user(task['user_id'])
         if not self.user:
             ch.basic_ack(delivery_tag=method.delivery_tag)
