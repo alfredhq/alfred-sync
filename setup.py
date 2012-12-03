@@ -15,7 +15,7 @@ setup(
         'PyYAML',
         'alfred-db',
         'msgpack-python',
-        'pyzmq',
+        'pika',
         'PyGithub',
     ],
     entry_points={
