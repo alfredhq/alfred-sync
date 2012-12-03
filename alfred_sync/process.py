@@ -46,15 +46,15 @@ class SyncProcess(multiprocessing.Process):
 
     def callback(self, ch, method, properties, body):
         task = msgpack.unpackb(body, encoding='utf-8')
-        logging.info('[PID {!r}] Recieved task {!r}'.format(self.pid, task))
+        logging.info('[PID {}] Recieved task {!r}'.format(self.pid, task))
         self.user_id = task['user_id']
         self.user = self.session.query(User).filter_by(
             id=self.user_id, is_syncing=False
         ).first()
         if not self.user:
             ch.basic_ack(delivery_tag=method.delivery_tag)
-            logging.debug(
-                '[PID {!r}] User {!d} is already sincing or not exists'.format(
+            logging.info(
+                '[PID {}] User {} is already syncing or not exists'.format(
                     self.pid, self.user_id
                 )
             )
@@ -71,7 +71,7 @@ class SyncProcess(multiprocessing.Process):
             ch.basic_ack(delivery_tag=method.delivery_tag)
         finally:
             self.set_user_syncing(False)
-            logging.info('[PID {!r}] Finished task {!r}'.format(self.pid, task))
+            logging.info('[PID {}] Finished task {!r}'.format(self.pid, task))
 
     def sync(self):
         self.sync_user_repos()
