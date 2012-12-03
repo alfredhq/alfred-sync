@@ -28,29 +28,44 @@ class SyncProcess(multiprocessing.Process):
         logging.info(
             'Alfred-sync worker launched with pid: {!r}'.format(self.pid)
         )
-        self.engine = create_engine(self.config['database_uri'])
-        self.session = Session(bind=self.engine)
+        self.session = self.get_db_session(self.config['database_uri'])
         amqp_config = self.config['amqp']
-        parameters = pika.URLParameters(amqp_config['url'])
-        connection = pika.BlockingConnection(parameters)
-        channel = connection.channel()
-        channel.queue_declare(queue=amqp_config['queue_name'], durable=True)
-        channel.basic_qos(prefetch_count=1)
-        channel.basic_consume(self.callback, queue=amqp_config['queue_name'])
+        amqp_connection = self.get_amqp_connection(amqp_config['url'])
+        amqp_channel = self.get_amqp_channel(
+            amqp_connection, self.callback, amqp_config['queue_name']
+        )
         try:
-            channel.start_consuming()
+            amqp_channel.start_consuming()
         except Exception, e:
             raise e
         finally:
             self.session.close()
 
-    def callback(self, ch, method, properties, body):
-        task = msgpack.unpackb(body, encoding='utf-8')
-        logging.info('[PID {}] Recieved task {!r}'.format(self.pid, task))
-        self.user_id = task['user_id']
-        self.user = self.session.query(User).filter_by(
-            id=self.user_id, is_syncing=False
+    def get_db_session(self, database_uri):
+        engine = create_engine(database_uri)
+        return Session(bind=engine)
+
+    def get_amqp_connection(self, amqp_url):
+        return pika.BlockingConnection(
+            pika.URLParameters(amqp_url)
+        )
+
+    def get_amqp_channel(self, connection, callback, queue_name):
+        channel = connection.channel()
+        channel.queue_declare(queue=queue_name, durable=True)
+        channel.basic_qos(prefetch_count=1)
+        channel.basic_consume(callback, queue=queue_name)
+        return channel
+
+    def get_user(self, user_id):
+        return self.session.query(User).filter_by(
+            id=user_id, is_syncing=False
         ).first()
+
+    def callback(self, ch, method, properties, body):
+        logging.info('[PID {}] Recieved task {!r}'.format(self.pid, task))
+        task = msgpack.unpackb(body, encoding='utf-8')
+        self.user = self.get_user(task['user_id'])
         if not self.user:
             ch.basic_ack(delivery_tag=method.delivery_tag)
             logging.info(
@@ -68,8 +83,8 @@ class SyncProcess(multiprocessing.Process):
         else:
             self.user.last_synced_at = now()
             self.session.commit()
-            ch.basic_ack(delivery_tag=method.delivery_tag)
         finally:
+            ch.basic_ack(delivery_tag=method.delivery_tag)
             self.set_user_syncing(False)
             logging.info('[PID {}] Finished task {!r}'.format(self.pid, task))
 
